@@ -61,7 +61,6 @@ window.H = (function () {
     remove(id) { delete this.load().lessons[id]; this.save(); },
     log(ev) { const d = this.load(); ev.t = Date.now(); d.log.push(ev); if (d.log.length > 3000) d.log.splice(0, d.log.length - 3000); this.save(); },
     exportJSON() { return JSON.stringify({ version: 1, app: 'istoriya-10klas', exported: new Date().toISOString(), settings: { name: settings.get().name || '' }, progress: this.load() }); },
-    importJSON(json) { const o = JSON.parse(json); if (!o.progress || typeof o.progress.lessons !== 'object') throw new Error('Це не файл прогресу зошита'); this._d = o.progress; this.save(); if (o.settings && o.settings.name) settings.patch({ name: o.settings.name }); },
     merge(json) {
       const o = JSON.parse(json); const d = this.load(); let n = 0;
       Object.entries(o.progress.lessons || {}).forEach(([id, rec]) => { const cur = d.lessons[id]; if (!cur || (rec.last || 0) > (cur.last || 0)) { d.lessons[id] = rec; n++; } });

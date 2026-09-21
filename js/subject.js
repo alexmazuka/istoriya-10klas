@@ -11,7 +11,7 @@
   }
   const sub = H.state.subjMap[sid]; const ls = H.state.bySubject[sid]; const S = H.summary(l => l.subject === sid);
   const sections = []; ls.forEach(l => { let s = sections[sections.length - 1]; if (!s || s.name !== l.section) { s = { name: l.section, items: [] }; sections.push(s); } s.items.push(l); });
-  document.title = sub.name + ' — Робочий зошит';
+  document.title = sub.name + ' — Уроки історії';
   root.innerHTML = `<div class="card"><div class="hero"><div class="ring" style="--p:${S.pct};background:conic-gradient(${sub.color} calc(var(--p)*1%),#e5e7eb 0)"><span>${S.pct}%</span></div><div><h1 style="margin:0">${sub.icon} ${H.esc(sub.name)}</h1><small class="muted">${sub.hours} год/тиждень · ${ls.length} уроків у семестрі · виконано ${S.done}${S.avg != null ? ' · середній бал ' + S.avg + '%' : ''} · ${H.esc(sub.textbook)}</small></div></div></div>
     ${sections.map(sec => { const d = sec.items.filter(l => H.statusOf(l.id) === 'done').length; return `<div class="card"><h2 style="margin-top:0">${H.esc(sec.name)} <small class="muted">${d}/${sec.items.length}</small></h2>${sec.items.map(l => H.lessonRow(l, { date: true })).join('')}</div>`; }).join('')}`;
   });
