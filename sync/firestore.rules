@@ -1,0 +1,12 @@
+/* Правила безпеки Firestore для колекції h10families (той самий Firebase-проєкт zoshyt-4klas,
+   продубльовано тут для довідки — оригінал редагується у Firebase Console → Firestore → Rules).
+   Доступ не прив'язаний до логіну — його дає сам факт знання коду достатньої довжини/випадковості,
+   так само, як приватне посилання на документ. Колекція families тут теж є — то дані іншого
+   проєкту (молодша дитина), правило для неї не чіпати. */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /families/{familyCode} { allow read, write: if familyCode.size() >= 8; }
+    match /h10families/{code} { allow read, write: if code.size() >= 8; }
+  }
+}

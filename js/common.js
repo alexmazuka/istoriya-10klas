@@ -1,0 +1,272 @@
+/* Спільний модуль: дані, календар, прогрес, налаштування, синхронізація, шапка.
+   Той самий рушій, що й у суміжному проєкті zoshyt-4klas (молодша дитина, 4 клас), але:
+   namespace window.H (не Z, щоб не плутати два проєкти), і ДВІ важливі відмінності —
+   1) синхронізація ОБОВ'ЯЗКОВА з першого входу (requireCode), а не опційна;
+   2) уроки в межах предмета відкриваються СУВОРО послідовно (locked/unlockedReason). */
+window.H = (function () {
+  const LS_PROGRESS = 'h10.progress', LS_SETTINGS = 'h10.settings';
+  const state = { cal: null, subjects: null, subjMap: {}, timetable: null, plan: null, byId: {}, bySubject: {}, byWeek: {} };
+  const DAYS = ['', 'Понеділок', 'Вівторок', 'Середа', 'Четвер', "П'ятниця", 'Субота', 'Неділя'];
+  const DAYS_SHORT = ['', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
+
+  async function loadJSON(p) { const r = await fetch(p, { cache: 'no-cache' }); if (!r.ok) throw new Error(p + ' → ' + r.status); return r.json(); }
+
+  async function init() {
+    const [cal, subj, plan] = await Promise.all([loadJSON('data/calendar.json'), loadJSON('data/subjects.json'), loadJSON('data/plan.json')]);
+    state.cal = cal; state.subjects = subj.subjects; state.timetable = subj.timetable; state.timetableNote = subj.timetableNote; state.program = subj.program;
+    state.subjMap = Object.fromEntries(subj.subjects.map(s => [s.id, s]));
+    state.plan = plan.lessons; state.planMeta = plan;
+    plan.lessons.forEach(l => { state.byId[l.id] = l; (state.bySubject[l.subject] ||= []).push(l); (state.byWeek[l.week] ||= []).push(l); });
+    Object.values(state.bySubject).forEach(list => list.sort((a, b) => a.n - b.n));
+    return state;
+  }
+
+  /* ---------- календар ---------- */
+  function parseDate(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+  function isoDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function fmt(d, opts) { return d.toLocaleDateString('uk-UA', opts || { day: 'numeric', month: 'long' }); }
+  function weekInfo(week) { return state.cal.weeks.find(w => w.week === week); }
+  function dateOf(week, day) { const w = weekInfo(week); const d = parseDate(w.monday); d.setDate(d.getDate() + day - 1); return d; }
+  function today() { const s = settings.get(); if (s.fakeToday) { try { return parseDate(s.fakeToday); } catch (e) { } } const t = new Date(); t.setHours(0, 0, 0, 0); return t; }
+  function slotOf(date) { const iso = isoDate(date); for (const w of state.cal.weeks) for (const day of w.days) if (isoDate(dateOf(w.week, day)) === iso) return { week: w.week, day }; return null; }
+  function schoolDays() { const out = []; state.cal.weeks.forEach(w => w.days.forEach(day => out.push({ week: w.week, day, iso: isoDate(dateOf(w.week, day)) }))); return out; }
+  function currentWeek() {
+    const t = today(), iso = isoDate(t);
+    for (const w of state.cal.weeks) { const mon = parseDate(w.monday); const sun = new Date(mon); sun.setDate(sun.getDate() + 6); if (t >= mon && t <= sun) return w.week; }
+    if (iso < state.cal.start) return 1;
+    if (iso > state.cal.end) return state.cal.weeks[state.cal.weeks.length - 1].week;
+    for (const w of state.cal.weeks) if (parseDate(w.monday) > t) return w.week;
+    return state.cal.weeks[state.cal.weeks.length - 1].week;
+  }
+  function holidayOn(date) { const iso = isoDate(date); return state.cal.holidays.find(h => iso >= h.from && iso <= h.to) || null; }
+  function nextSchoolDay(date) { const iso = isoDate(date); return schoolDays().find(s => s.iso > iso) || null; }
+  function quarterOf(week) { return state.cal.quarters.find(q => week >= q.weeks[0] && week <= q.weeks[1]); }
+  function lessonsOn(week, day) { return (state.byWeek[week] || []).filter(l => l.day === day).sort((a, b) => a.pos - b.pos); }
+
+  /* ---------- прогрес ---------- */
+  const progress = {
+    _d: null,
+    load() {
+      if (!this._d) { try { this._d = JSON.parse(localStorage.getItem(LS_PROGRESS)) || {}; } catch (e) { this._d = {}; } }
+      this._d.lessons ||= {}; this._d.log ||= []; return this._d;
+    },
+    save() { localStorage.setItem(LS_PROGRESS, JSON.stringify(this.load())); sync.pushDebounced(); },
+    get(id) { return this.load().lessons[id] || null; },
+    ensure(id) {
+      const d = this.load();
+      if (!d.lessons[id]) d.lessons[id] = { opened: Date.now(), theory: null, practice: { answers: {}, results: {}, score: null, done: null, attempts: 0, best: null }, homework: { answers: {}, results: {}, score: null, submitted: null, review: null }, time: 0, last: Date.now() };
+      return d.lessons[id];
+    },
+    set(id, rec) { rec.last = Date.now(); this.load().lessons[id] = rec; this.save(); },
+    remove(id) { delete this.load().lessons[id]; this.save(); },
+    log(ev) { const d = this.load(); ev.t = Date.now(); d.log.push(ev); if (d.log.length > 3000) d.log.splice(0, d.log.length - 3000); this.save(); },
+    exportJSON() { return JSON.stringify({ version: 1, app: 'istoriya-10klas', exported: new Date().toISOString(), settings: { name: settings.get().name || '' }, progress: this.load() }); },
+    importJSON(json) { const o = JSON.parse(json); if (!o.progress || typeof o.progress.lessons !== 'object') throw new Error('Це не файл прогресу зошита'); this._d = o.progress; this.save(); if (o.settings && o.settings.name) settings.patch({ name: o.settings.name }); },
+    merge(json) {
+      const o = JSON.parse(json); const d = this.load(); let n = 0;
+      Object.entries(o.progress.lessons || {}).forEach(([id, rec]) => { const cur = d.lessons[id]; if (!cur || (rec.last || 0) > (cur.last || 0)) { d.lessons[id] = rec; n++; } });
+      const seen = new Set(d.log.map(e => e.t + e.type + (e.id || ''))); (o.progress.log || []).forEach(e => { const k = e.t + e.type + (e.id || ''); if (!seen.has(k)) { d.log.push(e); seen.add(k); } });
+      d.log.sort((a, b) => a.t - b.t); this.save(); return n;
+    },
+    reset() { this._d = { lessons: {}, log: [] }; this.save(); }
+  };
+
+  const PASS = 70;
+  function statusOf(id) { const r = progress.get(id); if (!r) return 'new'; if (r.practice.done && r.homework.submitted) return 'done'; if (r.practice.done) return 'practice'; return 'started'; }
+  function statusIcon(st) { return { new: '○', started: '◔', practice: '◑', done: '●' }[st] || '○'; }
+  function statusName(st) { return { new: 'не розпочато', started: 'розпочато', practice: 'практика виконана, домашнє не здано', done: 'виконано' }[st]; }
+  function starsOf(score) { if (score == null) return 0; if (score >= 90) return 3; if (score >= 70) return 2; if (score >= 50) return 1; return 0; }
+  function starsHTML(score) { const n = starsOf(score); return `<span class="stars" title="${score == null ? '' : score + '%'}">${'★'.repeat(n)}${'☆'.repeat(3 - n)}</span>`; }
+  function hwStatus(r) { if (!r || !r.homework.submitted) return r && r.homework.review && r.homework.review.status === 'redo' ? 'redo' : 'none'; if (r.homework.review && r.homework.review.status === 'ok') return 'ok'; return 'submitted'; }
+  function hwStatusName(s) { return { none: 'не здано', submitted: 'здано, очікує перевірки', ok: 'перевірено ✓', redo: 'повернуто на доопрацювання' }[s]; }
+
+  /* ---------- послідовне відкриття уроків ----------
+     Урок доступний, якщо це перший урок предмета, АБО попередній урок цього ж предмета
+     (за порядком n у bySubject) уже статус 'done' (практика завершена І домашнє здано). */
+  function prevLesson(l) { const list = state.bySubject[l.subject] || []; const i = list.findIndex(x => x.id === l.id); return i > 0 ? list[i - 1] : null; }
+  function locked(id) { const l = state.byId[id]; if (!l) return false; const prev = prevLesson(l); return !!(prev && statusOf(prev.id) !== 'done'); }
+  function lockReason(id) { const l = state.byId[id]; const prev = prevLesson(l); return prev ? `Спочатку заверши урок «${prev.title}» (${state.subjMap[prev.subject].name}, ${prev.n}-й).` : ''; }
+
+  function summary(filter) {
+    const ls = state.plan.filter(filter || (() => true));
+    let done = 0, practice = 0, started = 0, sumScore = 0, nScore = 0, time = 0, stars = 0, hwOk = 0, hwWait = 0;
+    ls.forEach(l => {
+      const st = statusOf(l.id); if (st === 'done') done++; else if (st === 'practice') practice++; else if (st === 'started') started++;
+      const r = progress.get(l.id); if (r) { time += r.time || 0; if (r.practice.best != null) { sumScore += r.practice.best; nScore++; stars += starsOf(r.practice.best); } const h = hwStatus(r); if (h === 'ok') hwOk++; if (h === 'submitted') hwWait++; }
+    });
+    return { total: ls.length, done, practice, started, notStarted: ls.length - done - practice - started, avg: nScore ? Math.round(sumScore / nScore) : null, time, stars, hwOk, hwWait, pct: ls.length ? Math.round(100 * done / ls.length) : 0 };
+  }
+  function overdue() { const iso = isoDate(today()); return state.plan.filter(l => isoDate(dateOf(l.week, l.day)) < iso && statusOf(l.id) !== 'done'); }
+
+  function xp() { let x = 0; Object.values(progress.load().lessons).forEach(r => { if (r.practice.done) { x += 10 + Math.round((r.practice.best || 0) / 10); if ((r.practice.best || 0) >= 90) x += 5; } if (r.homework.submitted) x += 10; if (r.homework.review && r.homework.review.status === 'ok') x += 5; }); return x; }
+  function level(x) { return Math.floor(x / 100) + 1; }
+  function streak() {
+    const days = new Set(); progress.load().log.forEach(e => { if (e.type === 'practice' || e.type === 'homework') days.add(isoDate(new Date(e.t))); });
+    const sd = schoolDays().map(s => s.iso); const t = isoDate(today());
+    let idx = sd.filter(s => s <= t).length - 1; if (idx < 0) return 0;
+    if (!days.has(sd[idx])) { if (sd[idx] === t) idx--; else return 0; }
+    let n = 0; while (idx >= 0 && days.has(sd[idx])) { n++; idx--; }
+    return n;
+  }
+
+  const BADGES = [
+    { id: 'first', icon: '🚩', name: 'Перше джерело', desc: 'Виконано перший урок', test: S => S.done >= 1 },
+    { id: 'ten', icon: '📜', name: 'Хронікер', desc: '10 уроків виконано', test: S => S.done >= 10 },
+    { id: 'twentyfive', icon: '🏛️', name: 'Знавець епохи', desc: '25 уроків виконано', test: S => S.done >= 25 },
+    { id: 'fifty', icon: '⚖️', name: 'Історик', desc: '50 уроків виконано', test: S => S.done >= 50 },
+    { id: 'all', icon: '🏆', name: 'Курс закрито', desc: 'Усі заплановані уроки виконано', test: S => S.total > 0 && S.done >= S.total },
+    { id: 'streak5', icon: '🔥', name: 'Серія 5', desc: '5 навчальних днів поспіль', test: (S, c) => c.streak >= 5 },
+    { id: 'streak15', icon: '🌋', name: 'Серія 15', desc: '15 навчальних днів поспіль', test: (S, c) => c.streak >= 15 },
+    { id: 'ukr', icon: '🇺🇦', name: 'Знавець історії України', desc: '15 уроків з Історії України', test: (S, c) => (c.bySubj.ukr || 0) >= 15 },
+    { id: 'world', icon: '🌐', name: 'Знавець всесвітньої історії', desc: '15 уроків із Всесвітньої історії', test: (S, c) => (c.bySubj.world || 0) >= 15 },
+    { id: 'stars', icon: '🌟', name: 'Відмінні знання', desc: '10 уроків на три зірки', test: (S, c) => c.threeStars >= 10 },
+    { id: 'stars25', icon: '✨', name: 'Глибоке розуміння', desc: '25 уроків на три зірки', test: (S, c) => c.threeStars >= 25 },
+    { id: 'hw', icon: '📝', name: 'Аргументовано', desc: '15 домашніх завдань перевірено й прийнято', test: (S, c) => c.reviewed >= 15 },
+    { id: 'time', icon: '⏱️', name: 'Марафонець', desc: '10 годин навчання', test: S => S.time >= 10 * 3600 },
+  ];
+  function badges() {
+    const S = summary(); const bySubj = {}; let threeStars = 0, reviewed = 0;
+    state.plan.forEach(l => { if (statusOf(l.id) === 'done') bySubj[l.subject] = (bySubj[l.subject] || 0) + 1; const r = progress.get(l.id); if (r && r.practice.best >= 90) threeStars++; if (r && r.homework.review && r.homework.review.status === 'ok') reviewed++; });
+    const c = { bySubj, threeStars, reviewed, streak: streak() };
+    return BADGES.map(b => ({ id: b.id, icon: b.icon, name: b.name, desc: b.desc, earned: !!b.test(S, c) }));
+  }
+
+  /* ---------- налаштування ---------- */
+  // PIN кабінету батьків — лише SHA-256 хеш, повідомляється окремо (поза інтерфейсом), щоб
+  // учень його не побачив. Змінити: увійти в кабінет батьків → Налаштування → новий PIN двічі.
+  const DEFAULT_PIN_HASH = '8b27152c446fe142680ad8fa2b3d14ebfc97d98892561cdb0dd3941273278462';
+  async function sha256Hex(s) { const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s))); return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join(''); }
+  const settings = {
+    get() { try { return JSON.parse(localStorage.getItem(LS_SETTINGS)) || {}; } catch (e) { return {}; } },
+    set(s) { localStorage.setItem(LS_SETTINGS, JSON.stringify(s)); },
+    patch(p) { this.set(Object.assign(this.get(), p)); },
+    pinHash() { return this.get().pinHash || DEFAULT_PIN_HASH; },
+    async checkPin(entered) { const h = this.pinHash(); return !!h && (await sha256Hex(entered)) === h; },
+    async setPin(newPin) { this.patch({ pinHash: await sha256Hex(newPin) }); }
+  };
+
+  /* ---------- синхронізація через Firebase: ОБОВ'ЯЗКОВИЙ спільний код з першого входу ----------
+   * Той самий Firebase-проєкт, що й zoshyt-4klas, окрема колекція families (у цьому проєкті —
+   * через префікс коду, оскільки це інший сайт/origin, дані фізично не перетинаються ніяк, але
+   * для чистоти зберігаємо у своїй колекції 'h10families'). Документ h10families/{code} містить
+   * прогрес як JSON-рядок (progress.exportJSON()), кожен пристрій з тим самим кодом підписаний
+   * на зміни в реальному часі (onSnapshot) і надсилає власні зміни з невеликою затримкою. */
+  function fbReady() { return new Promise(res => { if (window.__fb) res(window.__fb); else window.addEventListener('h10-fb-ready', () => res(window.__fb), { once: true }); }); }
+  function randomCode() {
+    const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let s = ''; for (let i = 0; i < 10; i++) s += abc[Math.floor(Math.random() * abc.length)];
+    return s.match(/.{1,5}/g).join('-');
+  }
+  const COLLECTION = 'h10families';
+  const sync = {
+    _unsub: null, _status: 'off', _pushTimer: null,
+    code() { return settings.get().joinCode || ''; },
+    enabled() { return !!this.code(); },
+    status() { return this._status; },
+    _setStatus(s) { this._status = s; window.dispatchEvent(new CustomEvent('h10-sync-status', { detail: s })); },
+    async createCode() { const code = randomCode(); settings.patch({ joinCode: code }); await this._push(); this._listen(); return code; },
+    async joinCode(rawCode) {
+      const code = String(rawCode || '').trim().toUpperCase().replace(/\s+/g, '');
+      if (code.length < 6) throw new Error('Код закороткий');
+      settings.patch({ joinCode: code }); this._listen(); return this._pull();
+    },
+    async _listen() {
+      if (!this.enabled()) return; if (this._unsub) { this._unsub(); this._unsub = null; }
+      this._setStatus('connecting');
+      const fb = await fbReady(); if (!this.enabled()) return;
+      const ref = fb.doc(fb.db, COLLECTION, this.code());
+      this._unsub = fb.onSnapshot(ref, snap => {
+        this._setStatus('on'); settings.patch({ lastSync: Date.now() });
+        const data = snap.data();
+        if (data && data.progressJson) { const n = progress.merge(data.progressJson); if (n) window.dispatchEvent(new CustomEvent('h10-remote-update', { detail: { n } })); }
+      }, err => { console.warn('h10 sync', err); this._setStatus('error'); });
+    },
+    async _pull() { const fb = await fbReady(); const ref = fb.doc(fb.db, COLLECTION, this.code()); const snap = await fb.getDoc(ref); const data = snap.data(); return data && data.progressJson ? progress.merge(data.progressJson) : 0; },
+    async _push() {
+      if (!this.enabled()) return; const fb = await fbReady(); if (!this.enabled()) return;
+      const ref = fb.doc(fb.db, COLLECTION, this.code());
+      try { await fb.setDoc(ref, { progressJson: progress.exportJSON(), updatedBy: settings.get().name || '', updatedAt: fb.serverTimestamp() }); settings.patch({ lastPush: Date.now() }); this._setStatus('on'); }
+      catch (e) { console.warn('h10 push', e); this._setStatus('error'); }
+    },
+    pushDebounced() { if (!this.enabled()) return; clearTimeout(this._pushTimer); this._pushTimer = setTimeout(() => this._push(), 1500); },
+    autoStart() { if (this.enabled()) this._listen(); },
+  };
+
+  /** Викликати одразу після H.init() на КОЖНІЙ сторінці, до будь-якого рендеру вмісту.
+   * Якщо код уже є — просто підключається й одразу викликає cb(). Якщо коду ще немає —
+   * показує повноекранний екран «Створити код / Ввести код» і викликає cb() лише після
+   * успішного підключення. Саме так реалізовано вимогу «і учень, і батьки вводять код
+   * при першому вході» — без коду застосунком узагалі не можна користуватись. */
+  function requireCode(cb) {
+    if (sync.enabled()) { sync.autoStart(); cb(); return; }
+    const bg = document.createElement('div'); bg.className = 'gate-bg';
+    bg.innerHTML = `<div class="gate">
+      <div class="gate-logo">📜</div>
+      <h1>Уроки історії</h1>
+      <p class="muted">Щоб прогрес зберігався й був спільним для учня та батьків, потрібен код доступу до акаунта.</p>
+      <div class="gate-tabs"><button class="on" data-t="join">Ввести код</button><button data-t="new">Створити новий</button></div>
+      <div id="gJoin"><div class="field"><label>Код, який вам повідомили</label><input id="gCode" placeholder="XXXXX-XXXXX" autocomplete="off" autocapitalize="off" style="text-transform:uppercase"></div><button class="btn" id="gJoinBtn">Приєднатися</button></div>
+      <div id="gNew" hidden><p class="muted">Створіть новий код зараз — зробіть це на ОДНОМУ пристрої (наприклад, батьківському), а потім введіть той самий код на пристрої учня, обравши «Ввести код».</p><button class="btn" id="gNewBtn">Створити код</button></div>
+      <p id="gErr" class="gate-err" hidden></p>
+    </div>`;
+    document.body.appendChild(bg);
+    const err = m => { const e = bg.querySelector('#gErr'); e.textContent = m; e.hidden = false; };
+    bg.querySelectorAll('.gate-tabs button').forEach(b => b.onclick = () => {
+      bg.querySelectorAll('.gate-tabs button').forEach(x => x.classList.remove('on')); b.classList.add('on');
+      bg.querySelector('#gJoin').hidden = b.dataset.t !== 'join'; bg.querySelector('#gNew').hidden = b.dataset.t !== 'new';
+    });
+    bg.querySelector('#gJoinBtn').onclick = async () => {
+      const v = bg.querySelector('#gCode').value.trim(); if (!v) return err('Введіть код.');
+      try { await sync.joinCode(v); bg.remove(); cb(); } catch (e) { err('Не вдалося підключитися: ' + e.message); }
+    };
+    bg.querySelector('#gNewBtn').onclick = async () => {
+      try { const code = await sync.createCode(); bg.remove(); cb(); setTimeout(() => alert('Ваш код доступу: ' + code + '\n\nЗапишіть його і введіть на іншому пристрої (учня чи батьків), щоб прогрес був спільним. Код також завжди видно в кабінеті батьків → Налаштування.'), 200); }
+      catch (e) { err('Не вдалося створити код: ' + e.message); }
+    };
+  }
+
+  /* ---------- утиліти ---------- */
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function md(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*([^*\n]+?)\*/g, '$1<i>$2</i>').replace(/\n/g, '<br>'); }
+  function hash(str) { let h = 7; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0; return h || 1; }
+  function shuffle(arr, seed) { const a = arr.slice(); let s = (seed || 1) >>> 0; const rnd = () => { s = (s * 1103515245 + 12345) >>> 0; return (s >>> 8) / 16777216; }; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+  function fmtTime(sec) { sec = sec || 0; const m = Math.round(sec / 60); if (m < 1) return '< 1 хв'; if (m < 60) return m + ' хв'; return Math.floor(m / 60) + ' год ' + (m % 60) + ' хв'; }
+  function fmtDT(ts) { if (!ts) return '—'; const d = new Date(ts); return d.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' }); }
+  function qs(k) { return new URLSearchParams(location.search).get(k); }
+  function subjTag(sid) { const s = state.subjMap[sid]; return `<span class="subj-tag" style="background:${s.color}">${s.icon} ${esc(s.short)}</span>`; }
+  function speak(text, lang) {
+    if (!('speechSynthesis' in window)) { alert('Озвучення недоступне у цьому браузері.'); return; }
+    speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = lang === 'en' ? 'en-GB' : 'uk-UA'; u.rate = 0.95;
+    const pick = () => { const vs = speechSynthesis.getVoices(); const pref = lang === 'en' ? ['en-GB', 'en-US', 'en'] : ['uk-UA', 'uk']; for (const p of pref) { const v = vs.find(v => v.lang.replace('_', '-').toLowerCase().startsWith(p.toLowerCase())); if (v) { u.voice = v; break; } } speechSynthesis.speak(u); };
+    if (speechSynthesis.getVoices().length) pick(); else speechSynthesis.onvoiceschanged = () => { speechSynthesis.onvoiceschanged = null; pick(); };
+  }
+  function lessonURL(id) { return 'lesson.html?id=' + encodeURIComponent(id); }
+  function lessonRow(l, opts) {
+    opts = opts || {}; const st = statusOf(l.id); const r = progress.get(l.id); const h = hwStatus(r); const lk = locked(l.id);
+    const date = opts.date ? `<small>${DAYS_SHORT[l.day]} ${fmt(dateOf(l.week, l.day), { day: 'numeric', month: 'short' })}</small>` : '';
+    const hw = st === 'done' ? `<span class="chip ${h === 'ok' ? 'ok' : ''}" title="Домашнє завдання: ${hwStatusName(h)}">${h === 'ok' ? '✓ перевірено' : 'здано'}</span>` : (h === 'redo' ? '<span class="chip warn">на доопрацювання</span>' : '');
+    if (lk) return `<span class="lesson-row locked" title="${esc(lockReason(l.id))}"><span class="status">🔒</span>${subjTag(l.subject)}<span class="t"><b>${esc(l.title)}</b>${date}</span><small class="muted">заблоковано</small></span>`;
+    return `<a class="lesson-row ${st}" href="${lessonURL(l.id)}"><span class="status" title="${statusName(st)}">${statusIcon(st)}</span>${subjTag(l.subject)}<span class="t"><b>${esc(l.title)}</b>${date}</span>${r && r.practice.best != null ? starsHTML(r.practice.best) : ''}${hw}</a>`;
+  }
+  function header(active) {
+    const s = settings.get(); const x = xp();
+    const nav = [['index.html', 'Сьогодні', 'home'], ['week.html', 'Тижні', 'week'], ['subject.html', 'Предмети', 'subject'], ['achievements.html', 'Нагороди', 'ach'], ['about.html', 'Про курс', 'about'], ['parent.html', '👪 Батькам', 'parent']];
+    return `<header class="top"><a class="brand" href="index.html"><span class="logo">📜</span><span>Уроки історії<small>10 клас · I семестр 2026/27</small></span></a>
+      <nav>${nav.map(n => `<a href="${n[0]}" class="${active === n[2] ? 'on' : ''}">${n[1]}</a>`).join('')}</nav>
+      <div class="me"><span class="chip" title="Очки досвіду">⚡ ${x} XP · рів. ${level(x)}</span><span class="chip" title="Днів поспіль">🔥 ${streak()}</span><span class="name">${esc(s.name || '')}</span></div></header>`;
+  }
+  function footer() { return `<footer>Уроки історії для 10 класу · Історія України і Всесвітня історія, рівень стандарту · за програмою МОН · <a href="about.html">Про курс</a></footer>`; }
+  function askName(cb) {
+    const s = settings.get(); if (s.name) return cb && cb(s.name);
+    const bg = document.createElement('div'); bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal"><h2 style="margin-top:0">Вітаємо</h2><p>Як до вас звертатися? Ім'я буде в шапці курсу та у звітах для батьків.</p><input id="nm" placeholder="Ім'я" maxlength="30"><p style="text-align:right;margin-bottom:0"><button class="btn" id="nmok">Продовжити</button></p></div>`;
+    document.body.appendChild(bg);
+    const done = () => { const v = bg.querySelector('#nm').value.trim() || 'Учень'; settings.patch({ name: v }); bg.remove(); cb && cb(v); };
+    bg.querySelector('#nmok').onclick = done; bg.querySelector('#nm').onkeydown = e => { if (e.key === 'Enter') done(); }; bg.querySelector('#nm').focus();
+  }
+  function toast(msg, cls) { const t = document.createElement('div'); t.textContent = msg; t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 18px;border-radius:8px;font-weight:700;z-index:99;box-shadow:0 6px 20px rgba(0,0,0,.25)'; if (cls === 'bad') t.style.background = '#991b1b'; if (cls === 'ok') t.style.background = '#166534'; document.body.appendChild(t); setTimeout(() => t.remove(), 2600); }
+
+  return { state, DAYS, DAYS_SHORT, init, loadJSON, parseDate, isoDate, fmt, weekInfo, dateOf, today, slotOf, schoolDays, currentWeek, holidayOn, nextSchoolDay, quarterOf, lessonsOn,
+    progress, PASS, statusOf, statusIcon, statusName, starsOf, starsHTML, hwStatus, hwStatusName, locked, lockReason, prevLesson, summary, overdue, xp, level, streak, badges, settings, sync, requireCode,
+    esc, md, hash, shuffle, fmtTime, fmtDT, qs, subjTag, speak, lessonURL, lessonRow, header, footer, askName, toast };
+})();
