@@ -208,7 +208,7 @@
         <div class="card" style="margin:0"><small class="muted">Час на уроці</small><div style="font-weight:800;font-size:1.1rem">${H.fmtTime(rec.time)}</div><small class="muted">орієнтовно ~${L.minutes} хв</small></div></div>
         ${st === 'done' ? '<p class="notice" style="border-color:var(--ok)">Урок виконано повністю.</p>' : '<p class="notice">Щоб урок зарахувався, потрібно завершити практику і здати домашнє завдання.</p>'}
         ${refl}
-        <p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">${next ? (H.locked(next.id) ? `<button class="btn" disabled title="Відкриється після завершення цього уроку">Наступний урок 🔒</button>` : `<a class="btn" href="${H.lessonURL(next.id)}">Наступний урок ▶</a>`) : ''}<a class="btn sec" href="index.html">📚 До уроків</a><a class="btn ghost" href="subject.html?s=${meta.subject}">Усі уроки предмета</a></p></div>`;
+        <p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">${next ? (H.locked(next.id) ? `<button class="btn" disabled title="Відкриється після завершення цього уроку">Наступний урок: ${H.esc(S.name)} 🔒</button>` : `<a class="btn" href="${H.lessonURL(next.id)}">Наступний урок: ${H.esc(S.name)} ▶</a>`) : ''}<a class="btn sec" href="subject.html?s=${meta.subject}">Усі уроки: ${H.esc(S.name)}</a><a class="btn sec" href="index.html">📚 До всіх уроків</a><a class="btn ghost" href="week.html?w=${meta.week}">📅 Розклад тижня</a></p></div>`;
     }
 
     /* ---------- маршрутизація кроків ---------- */
