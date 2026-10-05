@@ -35,8 +35,7 @@
     let tick = 0; setInterval(() => { if (document.visibilityState === 'visible') { rec.time = (rec.time || 0) + 1; if (++tick % 15 === 0) H.progress.set(id, rec); } }, 1000);
     document.addEventListener('visibilitychange', () => H.progress.set(id, rec)); window.addEventListener('beforeunload', () => H.progress.set(id, rec));
 
-    const ordered = H.state.bySubject[meta.subject]; const pos = ordered.findIndex(l => l.id === id); const next = ordered[pos + 1], prev = ordered[pos - 1];
-    const nextLocked = next ? H.locked(next.id) : false;
+    const ordered = H.state.bySubject[meta.subject]; const pos = ordered.findIndex(l => l.id === id); const next = ordered[pos + 1];
 
     const STEPS = [['theory', '1. Теорія'], ['practice', '2. Практика'], ['homework', '3. Домашнє завдання'], ['summary', '4. Підсумок']];
     let step = !rec.theory ? 'theory' : !rec.practice.done ? 'practice' : !rec.homework.submitted ? 'homework' : 'summary';
@@ -209,7 +208,7 @@
         <div class="card" style="margin:0"><small class="muted">Час на уроці</small><div style="font-weight:800;font-size:1.1rem">${H.fmtTime(rec.time)}</div><small class="muted">орієнтовно ~${L.minutes} хв</small></div></div>
         ${st === 'done' ? '<p class="notice" style="border-color:var(--ok)">Урок виконано повністю.</p>' : '<p class="notice">Щоб урок зарахувався, потрібно завершити практику і здати домашнє завдання.</p>'}
         ${refl}
-        <p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">${prev ? `<a class="btn ghost" href="${H.lessonURL(prev.id)}">◀ Попередній урок</a>` : ''}<a class="btn sec" href="subject.html?s=${meta.subject}">До списку уроків предмета</a>${next ? (nextLocked ? `<button class="btn" disabled title="Відкриється після завершення цього уроку">Наступний урок 🔒</button>` : `<a class="btn" href="${H.lessonURL(next.id)}">Наступний урок ▶</a>`) : '<a class="btn" href="index.html">На головну</a>'}</p></div>`;
+        <p style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">${next ? (H.locked(next.id) ? `<button class="btn" disabled title="Відкриється після завершення цього уроку">Наступний урок 🔒</button>` : `<a class="btn" href="${H.lessonURL(next.id)}">Наступний урок ▶</a>`) : ''}<a class="btn sec" href="index.html">📚 До уроків</a><a class="btn ghost" href="subject.html?s=${meta.subject}">Усі уроки предмета</a></p></div>`;
     }
 
     /* ---------- маршрутизація кроків ---------- */
