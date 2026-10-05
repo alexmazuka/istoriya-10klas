@@ -50,7 +50,7 @@
       return `<div class="notice">↩️ <b>Батьки повернули урок на доопрацювання.</b> Треба ще раз: ${parts.map(p => PART_TODO[p] + (partDone(p) ? ' ✓' : '')).join(', ')}.${rv.comment ? `<br>Коментар: ${H.esc(rv.comment)}` : ''}</div>`;
     }
     function finishRedo() { const parts = H.redoParts(rec); if (parts.length && parts.every(partDone)) { rec.homework.review = null; H.progress.log({ type: 'redo_done', id }); } }
-    /* кнопки кроків уроку — однакові вгорі (у шапці) і внизу кожного кроку, щоб не гортати вгору */
+    /* кнопки кроків уроку в шапці */
     function stepButtons() { return STEPS.map(([k, n]) => `<button data-step="${k}" class="${step === k ? 'on' : ''} ${stepState(k)}">${stepState(k) === 'done' ? '✓ ' : ''}${n}</button>`).join(''); }
     function head() {
       const d = H.dateOf(meta.week, meta.day);
@@ -104,7 +104,7 @@
         else foot = `<p style="margin-top:18px"><button class="btn ok" id="finish" disabled>Завершити практику</button> <small class="muted" id="finishHint">Спочатку перевір усі вправи.</small></p>`;
       } else {
         if (rec.homework.submitted) foot = `<div class="result-banner"><b>Домашнє завдання здано ${H.fmtDT(rec.homework.submitted)}</b>${rec.homework.score != null ? `<p>Автоперевірка: <b>${rec.homework.score}%</b> ${H.starsHTML(rec.homework.score)}</p>` : ''}<p class="muted">${H.hwStatus(rec) === 'ok' ? 'Батьки вже перевірили.' : 'Батьки побачать твої відповіді у своєму кабінеті.'}</p><p><button class="btn" data-go="summary">До підсумку</button></p></div>`;
-        else foot = `<p style="margin-top:18px"><button class="btn ok" id="submitHW" disabled>Здати домашнє завдання</button> <small class="muted" id="finishHint">Спочатку перевір усі завдання.</small></p>`;
+        else foot = `<p style="margin-top:18px"><button class="btn ok" id="submitHW" disabled>Здати домашнє завдання</button> <button class="btn ghost" data-go="summary" type="button">4. Підсумок ▶</button> <small class="muted" id="finishHint">Спочатку перевір усі завдання.</small></p>`;
       }
       return `<div class="card" id="exwrap" data-kind="${kind}">${intro}${review}${cards}${foot}</div>`;
     }
@@ -215,7 +215,7 @@
     function go(s) { step = s; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
     function render() {
       let body = step === 'theory' ? theoryView() : step === 'practice' ? exercisesView('practice') : step === 'homework' ? exercisesView('homework') : summaryView();
-      root.innerHTML = head() + body + `<div class="card steps-bottom"><small class="muted">Перейти до кроку уроку:</small><div class="steps">${stepButtons()}</div></div>`;
+      root.innerHTML = head() + body;
       if (window.AiHelp) window.AiHelp.setContext(aiContext());
       root.querySelectorAll('button[data-step]').forEach(b => b.onclick = () => go(b.dataset.step));
       root.querySelectorAll('button[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
