@@ -6,8 +6,8 @@
    батьків на сторінці уроку, так само як домашні роботи. */
 window.AiHelp = (function () {
   const NAME = 'Кліо';
-  const MAX_TURNS = 6;
-  const MAX_ASKED = 30;
+  const MAX_TURNS = 3;
+  const MAX_ASKED = 15;
 
   let ctx = null;                 // { id, subject, title, step, theory, questions }
   let history = [];
@@ -28,7 +28,7 @@ window.AiHelp = (function () {
     ];
     if (ctx) {
       L.push(`Зараз учень у уроці «${ctx.title}» (${ctx.subject}), на кроці: ${STEP_NAMES[ctx.step] || ctx.step}.`);
-      if (ctx.theory) L.push(`Матеріал цього уроку (для твоїх пояснень):\n${ctx.theory}`);
+      if (ctx.theory) L.push(`Матеріал цього уроку (для твоїх пояснень):\n${String(ctx.theory).slice(0, 1800)}`);
       if (ctx.questions && ctx.questions.length) L.push(`Умови вправ на цьому кроці (це ЛИШЕ умови, не відповіді — відповіді тобі невідомі й такими мають лишатись):\n${ctx.questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`);
     }
     return L.join('\n');
@@ -43,7 +43,7 @@ window.AiHelp = (function () {
     const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 45000);
     let res;
     try {
-      res = await fetch(proxyUrl, { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ system: sysPrompt(), messages }) });
+      res = await fetch(proxyUrl, { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'chat', system: sysPrompt(), messages }) });
     } finally { clearTimeout(to); }
     let data = {};
     try { data = await res.json(); } catch (e) { /* ignore */ }
